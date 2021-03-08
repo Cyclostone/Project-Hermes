@@ -47,8 +47,8 @@ class _GithubLoginWidgetState extends State<GithubLoginWidget> {
             await _redirectServer?.close();
             // Bind to an ephemeral port on localhost
             _redirectServer = await HttpServer.bind('localhost', 0);
-            // TODO Complete _getOAuth2Client method
-            var authenticatedHttpClient = await _getOAuth2Client();
+            var authenticatedHttpClient = await _getOAuth2Client(
+                Uri.parse('http://localhost:${_redirectServer.port}/auth'));
             setState(() {
               _client = authenticatedHttpClient;
             });
@@ -61,9 +61,59 @@ class _GithubLoginWidgetState extends State<GithubLoginWidget> {
 
   Future<oauth2.Client> _getOAuth2Client(Uri redirectUrl) async {
     if (widget.githubClientId.isEmpty || widget.githubClientSecret.isEmpty) {
-      throw const GithubLoginException(
-          // TODO Complete GithubLogin Exception Class First
-          );
+      throw const GithubLoginException('githubClient');
+    }
+    var grant = oauth2.AuthorizationCodeGrant(
+      widget.githubClientId,
+      _authorizationEndpoint,
+      _tokenEndPoint,
+      secret: widget.githubClientSecret,
+      httpClient: _JsonAcceptingHttpClient(),
+    );
+    var authorizationUrl =
+        grant.getAuthorizationUrl(redirectUrl, scopes: widget.githubScopes);
+
+    await _redirect(authorizationUrl);
+    var responseQueryParameters = await _listen();
+    var client =
+        await grant.handleAuthorizationResponse(responseQueryParameters);
+    return client;
+  }
+
+  Future<void> _redirect(Uri authorizationUrl) async {
+    var url = authorizationUrl.toString();
+    if (await canLaunch(url)) {
+      await launch(url);
+    } else {
+      throw GithubLoginException('Could not launch $url');
     }
   }
+
+  Future<Map<String, String>> _listen() async {
+    var request = await _redirectServer.first;
+    var params = request.uri.queryParameters;
+    request.response.statusCode = 200;
+    request.response.headers.set('content-type', 'text/plain');
+    request.response.writeln('Authenticated! You can close this tab.');
+    await request.response.close();
+    await _redirectServer.close();
+    _redirectServer = null;
+    return params;
+  }
+}
+
+class _JsonAcceptingHttpClient extends http.BaseClient {
+  final _httpClient = http.Client();
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    request.headers['Accept'] = 'application/json';
+    return _httpClient.send(request);
+  }
+}
+
+class GithubLoginException implements Exception {
+  const GithubLoginException(this.message);
+  final String message;
+  @override
+  String toString() => message;
 }
